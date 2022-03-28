@@ -1,6 +1,8 @@
 import inspect
 import logging
 import os
+import pathlib
+import threading
 from enum import Flag, auto
 from functools import wraps
 from uuid import uuid1
@@ -102,9 +104,29 @@ class Window:
         self._closing = self.events.closing
         self._loaded = self.events.loaded
         self._shown = self.events.shown
+        self._drop_path_event = threading.Event()
+        self._drop_path = None
 
         self.gui = None
         self._is_http_server = False
+
+    def set_drop_path(self, path: pathlib.Path):
+        """Called when a file is dropped onto webview."""
+        self._drop_path = path
+        self._drop_path_event.set()
+
+    def get_drop_path(self, timeout: float = 0.5) -> pathlib.Path:
+        """
+        Get the path of the most recently dropped file. This will
+        wait until the path has been received.
+        :param timeout: Timeout in seconds
+        :return: The directory to the currently dropped file.
+        """
+        self._drop_path_event.wait(timeout)
+        drop_path = self._drop_path
+        self._drop_path = None
+        self._drop_path_event.clear()
+        return drop_path
 
     def _initialize(self, gui, multiprocessing, http_server):
         self.gui = gui

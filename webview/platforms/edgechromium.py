@@ -10,24 +10,27 @@ http://github.com/r0x0r/pywebview/
 import os
 import logging
 import json
+import pathlib
 import webbrowser
 from threading import Semaphore
 from ctypes import windll
 from platform import architecture
+from urllib.parse import unquote, urlparse
 
 from webview import _debug, _user_agent
 from webview.serving import resolve_url
-from webview.util import parse_api_js, interop_dll_path, parse_file_type, inject_base_uri, default_html, js_bridge_call
+from webview.util import parse_api_js, interop_dll_path, parse_file_type, \
+    inject_base_uri, default_html, js_bridge_call
 from webview.js import alert
 from webview.js.css import disable_text_select
 
 import clr
 
-
 clr.AddReference('System.Windows.Forms')
 clr.AddReference('System.Collections')
 clr.AddReference('System.Threading')
 
+from System import Array
 import System.Windows.Forms as WinForms
 from System import IntPtr, Int32, String, Action, Func, Type, Environment, Uri
 from System.Threading.Tasks import Task, TaskScheduler, TaskContinuationOptions
@@ -42,12 +45,13 @@ from Microsoft.Web.WebView2.Core import CoreWebView2Environment
 
 logger = logging.getLogger('pywebview')
 
+
 class EdgeChrome:
     def __init__(self, form, window):
         self.pywebview_window = window
         self.web_view = WebView2()
         props = CoreWebView2CreationProperties()
-        #props.UserDataFolder = os.path.join(os.getcwd(), 'profile')
+        # props.UserDataFolder = os.path.join(os.getcwd(), 'profile')
         props.UserDataFolder = os.path.join(os.environ['LOCALAPPDATA'], 'pywebview')
         self.web_view.CreationProperties = props
         form.Controls.Add(self.web_view)
@@ -80,7 +84,8 @@ class EdgeChrome:
     def evaluate_js(self, script, id, callback=None):
         def _callback(result):
             if callback is None:
-                self.js_results[id] = None if result is None or result == '' else json.loads(result)
+                self.js_results[
+                    id] = None if result is None or result == '' else json.loads(result)
                 self.js_result_semaphore.release()
             else:
                 # future js callback option to handle async js method
@@ -88,13 +93,14 @@ class EdgeChrome:
                 self.js_results[id] = None
                 self.js_result_semaphore.release()
 
-        self.syncContextTaskScheduler = TaskScheduler.FromCurrentSynchronizationContext()
+        self.syncContextTaskScheduler = \
+            TaskScheduler.FromCurrentSynchronizationContext()
         try:
             result = self.web_view.ExecuteScriptAsync(script).ContinueWith(
-            Action[Task[String]](
-                lambda task: _callback(json.loads(task.Result))
-            ),
-            self.syncContextTaskScheduler)
+                Action[Task[String]](
+                    lambda task: _callback(json.loads(task.Result))
+                ),
+                self.syncContextTaskScheduler)
         except Exception as e:
             logger.exception('Error occurred in script')
             self.js_results[id] = None
@@ -123,6 +129,13 @@ class EdgeChrome:
                 WinForms.MessageBox.Show(func_param)
             elif func_name == 'console':
                 print(func_param)
+            elif func_name == 'dragfile':
+                files = [pathlib.Path(unquote(
+                    urlparse(file.replace('file:///', 'file://')).path)).as_posix() for
+                         file in func_param['files']]
+                do = WinForms.DataObject(WinForms.DataFormats.FileDrop,
+                                         Array[str](files))
+                self.web_view.DoDragDrop(do, WinForms.DragDropEffects.Copy)
             else:
                 js_bridge_call(self.pywebview_window, func_name, func_param, value_id)
         except Exception as e:
@@ -130,7 +143,10 @@ class EdgeChrome:
 
     def on_new_window_request(self, _, args):
         args.set_Handled(True)
-        webbrowser.open(str(args.get_Uri()))
+        dropped_file_path = args.get_Uri()
+        parent_dir = pathlib.Path(
+            unquote(dropped_file_path.replace('file:///', ''))).parent
+        self.pywebview_window.set_drop_path(parent_dir)
 
     def on_webview_ready(self, sender, args):
         sender.CoreWebView2.NewWindowRequested += self.on_new_window_request
